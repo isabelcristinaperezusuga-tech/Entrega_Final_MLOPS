@@ -1,0 +1,23 @@
+# ──────────────────────────────────────────────
+# Imagen para el Pipeline de ML
+# ──────────────────────────────────────────────
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Dependencias del sistema
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Instalar dependencias Python
+COPY requirements.pipeline.txt .
+RUN pip install --no-cache-dir -r requirements.pipeline.txt
+
+# Copiar código fuente
+COPY src/ ./src/
+
+# Crear directorio de modelos
+RUN mkdir -p models
+
+CMD ["python", "src/pipeline.py"]
