@@ -19,7 +19,8 @@ from sklearn.preprocessing import MinMaxScaler, LabelEncoder
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.metrics import (
     classification_report, recall_score, f1_score,
-    precision_score, accuracy_score, confusion_matrix
+    precision_score, accuracy_score, confusion_matrix,
+    roc_auc_score, average_precision_score, matthews_corrcoef
 )
 from imblearn.over_sampling import SMOTE
 import xgboost as xgb
@@ -77,9 +78,9 @@ def limpiar_datos(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     # Codificar variable objetivo: '>50K' -> 1, '<=50K' -> 0
     df["income"] = df["income"].map({"<=50K": 0, ">50K": 1})
 
-    # Columnas a usar (según EDA)
+    # fnlwgt excluido: variable administrativa del censo, bajo poder predictivo
     columnas_numericas = [
-        "age", "fnlwgt", "educational-num",
+     "age", "educational-num",
         "capital-gain", "capital-loss", "hours-per-week"
     ]
     columnas_categoricas = [
@@ -191,12 +192,35 @@ def entrenar_modelos(df: pd.DataFrame, metadata: dict) -> list[dict]:
             # Evaluar en test
             y_pred = modelo.predict(X_test)
 
+            y_prob = modelo.predict_proba(X_test)[:, 1]
+
             metricas = {
+                # ── Métricas base ──
                 "accuracy":          accuracy_score(y_test, y_pred),
                 "recall_class1":     recall_score(y_test, y_pred, pos_label=1),
                 "precision_class1":  precision_score(y_test, y_pred, pos_label=1),
                 "f1_class1":         f1_score(y_test, y_pred, pos_label=1),
+                # ── Métricas avanzadas ──
+                "roc_auc":           roc_auc_score(y_test, y_prob),
+                "pr_auc":            average_precision_score(y_test, y_prob),
+                "mcc":               matthews_corrcoef(y_test, y_pred),
+                "f1_macro":          f1_score(y_test, y_pred, average="macro"),
+                "f1_weighted":       f1_score(y_test, y_pred, average="weighted"),
             }
+
+            # Matriz de confusión como artefacto en MLflow
+            cm = confusion_matrix(y_test, y_pred)
+            cm_path = f"/tmp/confusion_matrix_{nombre}.txt"
+            with open(cm_path, "w") as f:
+                f.write(f"Matriz de Confusión — {nombre}\n")
+                f.write(f"{'':20} Pred ≤50K   Pred >50K\n")
+                f.write(f"{'Real ≤50K':20} {cm[0][0]:8}   {cm[0][1]:8}\n")
+                f.write(f"{'Real >50K':20} {cm[1][0]:8}   {cm[1][1]:8}\n\n")
+                f.write(f"Verdaderos Negativos  (TN): {cm[0][0]}\n")
+                f.write(f"Falsos Positivos      (FP): {cm[0][1]}\n")
+                f.write(f"Falsos Negativos      (FN): {cm[1][0]}\n")
+                f.write(f"Verdaderos Positivos  (TP): {cm[1][1]}\n")
+            mlflow.log_artifact(cm_path, artifact_path="metricas")
 
             # Loggear métricas en MLflow
             mlflow.log_metrics(metricas)
@@ -213,7 +237,7 @@ def entrenar_modelos(df: pd.DataFrame, metadata: dict) -> list[dict]:
             "run_id": run_id,
         })
 
-        logger.info(f"  {nombre} – recall clase 1: {metricas['recall_class1']:.4f}")
+        logger.info(f"  {nombre} – recall cl.1: {metricas['recall_class1']:.4f} | ROC-AUC: {metricas['roc_auc']:.4f} | MCC: {metricas['mcc']:.4f}")
 
     return resultados
 
@@ -287,8 +311,12 @@ def pipeline_principal(data_path: str = str(DATA_PATH)):
     ruta_modelo = guardar_modelo(mejor)
 
     print(f"\n✅ Pipeline completado. Modelo en: {ruta_modelo}")
-    print(f"   Mejor modelo : {mejor['nombre']}")
-    print(f"   Recall cl. 1 : {mejor['metricas']['recall_class1']:.4f}")
+    print(f"   Mejor modelo  : {mejor['nombre']}")
+    print(f"   Recall cl. 1  : {mejor['metricas']['recall_class1']:.4f}")
+    print(f"   ROC-AUC       : {mejor['metricas']['roc_auc']:.4f}")
+    print(f"   PR-AUC        : {mejor['metricas']['pr_auc']:.4f}")
+    print(f"   MCC           : {mejor['metricas']['mcc']:.4f}")
+    print(f"   F1 Macro      : {mejor['metricas']['f1_macro']:.4f}")
     return mejor
 
 
